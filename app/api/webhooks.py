@@ -26,6 +26,7 @@ async def github_webhook(
     request: Request,
     background_tasks: BackgroundTasks,
     x_hub_signature_256: str = Header(default=""),
+    x_github_event: str = Header(default=""),
 ):
     """Entry point for GitHub webhook events.
 
@@ -40,9 +41,10 @@ async def github_webhook(
 
     payload = await request.json()
     action = payload.get("action")
+    logger.info("Received event=%s action=%s", x_github_event, action)
 
-    if action not in HANDLED_ACTIONS:
-        return {"status": "ignored", "action": action}
+    if x_github_event != "pull_request" or action not in HANDLED_ACTIONS:
+        return {"status": "ignored", "event": x_github_event, "action": action}
 
     pull_request = payload.get("pull_request", {})
     repository = payload.get("repository", {})

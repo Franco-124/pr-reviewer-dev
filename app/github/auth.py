@@ -12,10 +12,17 @@ from app.config import settings
 GITHUB_API_URL = "https://api.github.com"
 
 
+def _load_private_key() -> str:
+    """Load the App's PEM private key from an env var (Render-friendly) or a local file."""
+    if settings.github_private_key:
+        return settings.github_private_key
+    with open(settings.github_private_key_path, "rb") as key_file:
+        return key_file.read()
+
+
 def generate_app_jwt() -> str:
     """Create a signed JWT for the GitHub App (RS256, 10 min expiry)."""
-    with open(settings.github_private_key_path, "rb") as key_file:
-        private_key = key_file.read()
+    private_key = _load_private_key()
 
     now = int(time.time())
     payload = {
