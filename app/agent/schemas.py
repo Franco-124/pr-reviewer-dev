@@ -8,13 +8,16 @@ from pydantic import BaseModel, Field
 
 
 class Finding(BaseModel):
-    line: int
+    file: str = Field(description="Path of the affected file, relative to the repo root")
+    line: int = Field(description="1-indexed line number the finding applies to")
     severity: Literal["critical", "warning", "suggestion"]
-    message: str
+    category: str = Field(description="Lens that produced the finding, e.g. 'security', 'scalability', 'style'")
+    description: str = Field(description="What the issue is and why it matters")
+    recommendation: str = Field(description="Concrete suggested fix")
 
 
-class ReviewOutput(BaseModel):
-    summary: str = Field(description="High-level overview of the review")
+class ReviewResult(BaseModel):
+    summary: str = Field(default="", description="High-level overview of the review")
     findings: list[Finding] = Field(default_factory=list)
     approved: bool = True
 
@@ -23,6 +26,11 @@ class ReviewState(BaseModel):
     diff: str = ""
     pr_url: str = ""
     head_sha: str = ""
-    security: ReviewOutput = Field(default_factory=ReviewOutput)
-    scalability: ReviewOutput = Field(default_factory=ReviewOutput)
-    style: ReviewOutput = Field(default_factory=ReviewOutput)
+    security: ReviewResult = Field(default_factory=ReviewResult)
+    scalability: ReviewResult = Field(default_factory=ReviewResult)
+    aggregated: ReviewResult | None = Field(
+        default=None, description="Merged, severity-ranked output of aggregate_and_rank"
+    )
+    output: dict | None = Field(
+        default=None, description="Final GitHub review payload produced by format_output"
+    )

@@ -8,11 +8,13 @@ from fastapi import FastAPI
 
 from app.api.webhooks import router as webhook_router
 from app.config import settings
+from app.storage.idempotency import init_db
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # ── startup ────────────────────────────────────────────
+    await init_db()
     yield
     # ── shutdown ────────────────────────────────────────────
 
