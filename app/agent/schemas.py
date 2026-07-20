@@ -13,7 +13,15 @@ class Finding(BaseModel):
     severity: Literal["critical", "warning", "suggestion"]
     category: str = Field(description="Lens that produced the finding, e.g. 'security', 'scalability', 'style'")
     description: str = Field(description="What the issue is and why it matters")
-    recommendation: str = Field(description="Concrete suggested fix")
+    recommendation: str = Field(
+        description="Concrete, actionable fix — specific enough that a developer could apply it "
+        "without further investigation (name the exact function/pattern to use, not just 'validate input')"
+    )
+    confidence: int = Field(
+        ge=0, le=100,
+        description="0-100: how confident you are this is a real, non-speculative issue given only the diff. "
+        "Below 50 means you're unsure it's actually a problem — only include it if severity is 'suggestion'.",
+    )
 
 
 class ReviewResult(BaseModel):
@@ -43,6 +51,16 @@ class ReviewState(BaseModel):
     new_findings: list[Finding] = Field(
         default_factory=list,
         description="Subset of aggregated.findings not already posted on a prior review of this PR",
+    )
+    merge_readiness_score: int = Field(
+        default=100, ge=0, le=100,
+        description="Deterministic 0-100 score computed in aggregate_and_rank from finding "
+        "counts/severity — NOT decided by the LLM.",
+    )
+    verdict: Literal["approve", "request_changes"] = Field(
+        default="approve",
+        description="Deterministic merge gate computed in aggregate_and_rank: any 'critical' "
+        "finding forces request_changes regardless of what any lens's own approved flag says.",
     )
     output: dict | None = Field(
         default=None, description="Final GitHub review payload produced by format_output"
