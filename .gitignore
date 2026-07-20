@@ -1,0 +1,11 @@
+*franco-pr-reviewer-dev.2026-07-20.private-key.pem
+
+
+__pycache__/
+*.pyc
+.env
+*.pem
+*.db
+.venv/
+venv/
+.atl
