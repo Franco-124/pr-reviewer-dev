@@ -12,6 +12,7 @@ from app.config import settings
 from app.github.auth import get_installation_token
 from app.github.client import fetch_diff, post_review
 from app.github.signature import verify_signature
+from app.storage.findings import save_findings
 from app.storage.idempotency import is_processed, mark_processed
 
 logger = logging.getLogger(__name__)
@@ -89,12 +90,21 @@ async def process_pull_request(
         token = await get_installation_token(str(installation_id))
         diff = await fetch_diff(owner, repo, pull_number, token)
 
-        state = ReviewState(diff=diff, pr_url=pr_url, head_sha=head_sha)
+        state = ReviewState(
+            diff=diff,
+            pr_url=pr_url,
+            head_sha=head_sha,
+            pr_id=pr_id,
+            owner=owner,
+            repo=repo,
+            token=token,
+        )
         graph = build_review_graph()
         result = await graph.ainvoke(state)
 
         review = await post_review(owner, repo, pull_number, token, result["output"])
 
         await mark_processed(pr_id, head_sha, review_id=review["id"])
+        await save_findings(pr_id, head_sha, result["aggregated"].findings)
     except Exception:
         logger.exception("Failed to process pull request %s (sha=%s)", pr_url, head_sha)

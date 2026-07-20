@@ -8,6 +8,7 @@ from fastapi import FastAPI
 
 from app.api.webhooks import router as webhook_router
 from app.config import settings
+from app.storage.findings import init_findings_db
 from app.storage.idempotency import init_db
 
 
@@ -15,6 +16,7 @@ from app.storage.idempotency import init_db
 async def lifespan(app: FastAPI):
     # ── startup ────────────────────────────────────────────
     await init_db()
+    await init_findings_db()
     yield
     # ── shutdown ────────────────────────────────────────────
 
