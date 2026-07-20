@@ -37,9 +37,9 @@ Config is loaded via `pydantic-settings` from a `.env` file (see `.env.example` 
 **GitHub App auth** (`app/github/auth.py`) is a two-step token exchange: `generate_app_jwt()` signs a short-lived RS256 JWT with the App's private key, which `get_installation_token()` then exchanges for an installation-scoped access token used by `app/github/client.py` to call the GitHub REST API.
 
 **Review pipeline** (`app/agent/`) is a LangGraph `StateGraph` over a single shared `ReviewState` (`app/agent/schemas.py`):
-- `ReviewState` carries the diff, PR URL, and head SHA in, and accumulates three independent `ReviewOutput` objects (`security`, `scalability`, `style`) as the graph runs.
-- `app/agent/nodes.py` defines one node per review lens — `security_review`, `scalability_review`, `style_review` — each analyzing the diff from a different angle and writing into its slot of `ReviewState`. A final `aggregate_review` node merges the three `ReviewOutput`s into the single review posted to GitHub.
-- `ReviewOutput` (summary + list of `Finding`, each with `line`/`severity`/`message`) is the structured output contract every review node and the aggregator conform to.
+- `ReviewState` carries the diff, PR URL, and head SHA in, and accumulates three independent `ReviewResult` objects (`security`, `scalability`, `style`) as the graph runs.
+- `app/agent/nodes.py` defines one node per review lens — `security_review`, `scalability_review`, `style_review` — each analyzing the diff from a different angle and writing into its slot of `ReviewState`. A final `aggregate_review` node merges the three `ReviewResult`s into the single review posted to GitHub.
+- `ReviewResult` (summary + list of `Finding`, each with `file`/`line`/`severity`/`category`/`description`/`recommendation`) is the structured output contract every review node and the aggregator conform to.
 - `app/agent/graph.py::build_review_graph()` is where these nodes get wired into the compiled graph (edges/ordering not yet implemented).
 
 **Storage** (`app/storage/`) is an empty package — intended for the idempotency/dedup store (`aiosqlite` is a declared dependency) but not yet implemented.
