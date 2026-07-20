@@ -26,6 +26,12 @@ class ReviewState(BaseModel):
     diff: str = ""
     pr_url: str = ""
     head_sha: str = ""
+    owner: str = ""
+    repo: str = ""
+    token: str = Field(default="", description="Installation access token, used by build_context for GitHub API calls")
+    repository_readme: str | None = Field(
+        default=None, description="Root README.md at head_sha, fetched by build_context; None if absent"
+    )
     security: ReviewResult = Field(default_factory=ReviewResult)
     scalability: ReviewResult = Field(default_factory=ReviewResult)
     aggregated: ReviewResult | None = Field(

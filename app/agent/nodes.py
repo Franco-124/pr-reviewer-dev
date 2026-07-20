@@ -8,6 +8,7 @@ from langchain_openai import ChatOpenAI
 
 from app.agent.schemas import Finding, ReviewResult, ReviewState
 from app.config import settings
+from app.github.client import get_readme
 
 
 def _get_llm() -> BaseChatModel:
@@ -23,7 +24,9 @@ SECURITY_SYSTEM_PROMPT = (
     "Flag injection risks, hardcoded secrets, auth/authorization gaps, unsafe "
     "deserialization, and any OWASP Top 10 concern. Only report issues you can "
     "point to specific lines for. If nothing is wrong, return an empty findings "
-    "list and approved=true."
+    "list and approved=true. You may be given the repository's README as "
+    "background on the project's purpose — use it only to understand intent and "
+    "context, never as code to review or flag findings in."
 )
 
 SCALABILITY_SYSTEM_PROMPT = (
@@ -31,26 +34,36 @@ SCALABILITY_SYSTEM_PROMPT = (
     "and performance concerns: N+1 queries, unbounded loops/pagination, blocking "
     "calls inside async code, missing indexes, and unbounded memory growth. Only "
     "report issues you can point to specific lines for. If nothing is wrong, return "
-    "an empty findings list and approved=true."
+    "an empty findings list and approved=true. You may be given the repository's "
+    "README as background on the project's purpose — use it only to understand "
+    "intent and context, never as code to review or flag findings in."
 )
 
 
 async def build_context(state: ReviewState) -> dict:
-    """Prepare/normalize the diff before it's handed to the review lenses.
+    """Enrich the diff with repository context before it's handed to the review lenses.
 
-    Currently a passthrough — the diff produced by ``app.github.client.fetch_diff``
-    is already a unified diff string. This node exists as the graph's designated
-    place to add context enrichment later (e.g. fetching full file contents for
-    changed hunks) without touching the review nodes themselves.
+    Fetches the root README.md at head_sha so the review nodes have background
+    on the project's purpose — it's kept separate from the diff and never
+    treated as code to analyse.
     """
-    return {}
+    readme = await get_readme(state.owner, state.repo, state.head_sha, state.token)
+    return {"repository_readme": readme}
 
 
 async def _run_review(state: ReviewState, system_prompt: str) -> ReviewResult:
     llm = _get_llm().with_structured_output(ReviewResult)
+    content_parts = []
+    if state.repository_readme:
+        content_parts.append(
+            "Project context (README.md, background only — do not review or "
+            f"flag findings in this text):\n{state.repository_readme}"
+        )
+    content_parts.append(f"Review this diff:\n\n{state.diff}")
+
     messages = [
         SystemMessage(content=system_prompt),
-        HumanMessage(content=f"Review this diff:\n\n{state.diff}"),
+        HumanMessage(content="\n\n".join(content_parts)),
     ]
     return await llm.ainvoke(messages)
 

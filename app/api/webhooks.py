@@ -89,7 +89,9 @@ async def process_pull_request(
         token = await get_installation_token(str(installation_id))
         diff = await fetch_diff(owner, repo, pull_number, token)
 
-        state = ReviewState(diff=diff, pr_url=pr_url, head_sha=head_sha)
+        state = ReviewState(
+            diff=diff, pr_url=pr_url, head_sha=head_sha, owner=owner, repo=repo, token=token
+        )
         graph = build_review_graph()
         result = await graph.ainvoke(state)
 

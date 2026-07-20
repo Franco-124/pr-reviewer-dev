@@ -83,6 +83,25 @@ async def fetch_file_content(owner: str, repo: str, path: str, ref: str, token: 
     return base64.b64decode(data["content"]).decode("utf-8")
 
 
+async def get_readme(owner: str, repo: str, ref: str, token: str) -> str | None:
+    """Retrieve the root ``README.md`` at a specific commit ref, or ``None`` if it doesn't exist.
+
+    Uses the same contents API as ``fetch_file_content``, but treats a 404
+    (no README at this ref) as a normal, expected outcome rather than an error.
+    """
+    async with httpx.AsyncClient(base_url=GITHUB_API_URL, headers=_auth_headers(token)) as client:
+        response = await client.get(
+            f"/repos/{owner}/{repo}/contents/README.md",
+            params={"ref": ref},
+        )
+        if response.status_code == 404:
+            return None
+        response.raise_for_status()
+        data = response.json()
+
+    return base64.b64decode(data["content"]).decode("utf-8")
+
+
 async def post_review(owner: str, repo: str, pull_number: int, token: str, review_payload: dict) -> dict:
     """Submit a pull request review with inline comments (``POST /pulls/{pr}/reviews``).
 
