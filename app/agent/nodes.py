@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
 from app.agent.schemas import Finding, ReviewResult, ReviewState
 from app.config import settings
 from app.github.client import get_readme
+from app.storage.findings import get_seen_fingerprints, split_new_and_recurring
 
 
 def _get_llm() -> BaseChatModel:
@@ -39,6 +40,39 @@ SCALABILITY_SYSTEM_PROMPT = (
     "intent and context, never as code to review or flag findings in."
 )
 
+STYLE_SYSTEM_PROMPT = (
+    "You are a senior engineer reviewing a pull request diff for code style and "
+    "project conventions: inconsistent naming, dead code, missing type hints on "
+    "new public functions, overly complex or hard-to-read constructs, and clear "
+    "violations of the language's idioms. This project is Python. Do not flag "
+    "purely subjective nitpicks with no real readability impact. Only report "
+    "issues you can point to specific lines for. If nothing is wrong, return an "
+    "empty findings list and approved=true. You may be given the repository's "
+    "README as background on the project's purpose — use it only to understand "
+    "intent and context, never as code to review or flag findings in."
+)
+
+CORRECTNESS_SYSTEM_PROMPT = (
+    "You are a senior software engineer reviewing a pull request diff for "
+    "functional correctness: incorrect logic, off-by-one errors, unhandled edge "
+    "cases, wrong API usage, broken control flow, and behavior that contradicts "
+    "the apparent intent of the surrounding code. This is not a security or "
+    "performance review — focus purely on whether the code does what it appears "
+    "to intend to do. Only report issues you can point to specific lines for. If "
+    "nothing is wrong, return an empty findings list and approved=true. You may "
+    "be given the repository's README as background on the project's purpose — "
+    "use it only to understand intent and context, never as code to review or "
+    "flag findings in."
+)
+
+CRITIQUE_INSTRUCTIONS = (
+    "Critically re-examine the findings you just drafted against the diff above. "
+    "Drop any that are false positives, speculative, not clearly supported by the "
+    "diff, or out of scope for your role. Adjust severity where it's overstated "
+    "or understated. Do not invent new findings you didn't already report. Return "
+    "the final, refined result."
+)
+
 
 async def build_context(state: ReviewState) -> dict:
     """Enrich the diff with repository context before it's handed to the review lenses.
@@ -52,6 +86,11 @@ async def build_context(state: ReviewState) -> dict:
 
 
 async def _run_review(state: ReviewState, system_prompt: str) -> ReviewResult:
+    """Draft findings for one lens, then a second pass has the same model critique
+    and refine its own draft (drop false positives, correct severity) before it's
+    accepted. Two LLM calls per lens, in exchange for materially fewer false
+    positives reaching the PR.
+    """
     llm = _get_llm().with_structured_output(ReviewResult)
     content_parts = []
     if state.repository_readme:
@@ -60,12 +99,24 @@ async def _run_review(state: ReviewState, system_prompt: str) -> ReviewResult:
             f"flag findings in this text):\n{state.repository_readme}"
         )
     content_parts.append(f"Review this diff:\n\n{state.diff}")
+    review_prompt = "\n\n".join(content_parts)
 
-    messages = [
-        SystemMessage(content=system_prompt),
-        HumanMessage(content="\n\n".join(content_parts)),
-    ]
-    return await llm.ainvoke(messages)
+    draft = await llm.ainvoke(
+        [
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=review_prompt),
+        ]
+    )
+
+    refined = await llm.ainvoke(
+        [
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=review_prompt),
+            AIMessage(content=draft.model_dump_json()),
+            HumanMessage(content=CRITIQUE_INSTRUCTIONS),
+        ]
+    )
+    return refined
 
 
 async def security_review(state: ReviewState) -> dict:
@@ -78,36 +129,52 @@ async def scalability_review(state: ReviewState) -> dict:
     return {"scalability": await _run_review(state, SCALABILITY_SYSTEM_PROMPT)}
 
 
-async def aggregate_and_rank(state: ReviewState) -> dict:
-    """Merge all lens outputs into one ``ReviewResult``, ranked by severity.
+async def style_review(state: ReviewState) -> dict:
+    """Check code style, naming, and project conventions."""
+    return {"style": await _run_review(state, STYLE_SYSTEM_PROMPT)}
 
-    Deterministic (no LLM call): the individual lenses already produced
-    structured findings, so this node just combines and orders them.
+
+async def correctness_review(state: ReviewState) -> dict:
+    """Assess functional correctness: logic bugs, edge cases, wrong API usage."""
+    return {"correctness": await _run_review(state, CORRECTNESS_SYSTEM_PROMPT)}
+
+
+async def aggregate_and_rank(state: ReviewState) -> dict:
+    """Merge all lens outputs into one ``ReviewResult``, ranked by severity, and
+    split out which findings are new vs. already reported on a prior push to
+    this same PR (so ``format_output`` doesn't re-post duplicate inline comments).
+
+    Deterministic aside from the DB lookup: the individual lenses already
+    produced structured findings, so this node just combines, ranks, and dedupes.
     """
     severity_rank = {"critical": 0, "warning": 1, "suggestion": 2}
 
-    all_findings: list[Finding] = [
-        *state.security.findings,
-        *state.scalability.findings,
-    ]
+    lenses = [state.security, state.scalability, state.style, state.correctness]
+
+    all_findings: list[Finding] = [finding for lens in lenses for finding in lens.findings]
     all_findings.sort(key=lambda finding: severity_rank[finding.severity])
 
-    approved = state.security.approved and state.scalability.approved
+    approved = all(lens.approved for lens in lenses)
 
-    summary_parts = [
-        part
-        for part in (state.security.summary, state.scalability.summary)
-        if part
-    ]
+    summary_parts = [lens.summary for lens in lenses if lens.summary]
     summary = " ".join(summary_parts) or "No issues found."
 
+    seen = await get_seen_fingerprints(state.pr_id)
+    new_findings, recurring_findings = split_new_and_recurring(all_findings, seen)
+    if recurring_findings:
+        summary += f" ({len(recurring_findings)} previously reported finding(s) remain unresolved.)"
+
     aggregated = ReviewResult(summary=summary, findings=all_findings, approved=approved)
-    return {"aggregated": aggregated}
+    return {"aggregated": aggregated, "new_findings": new_findings}
 
 
 async def format_output(state: ReviewState) -> dict:
     """Render the aggregated ``ReviewResult`` into the GitHub review payload shape
     expected by ``app.github.client.post_review``.
+
+    Inline comments are only posted for ``new_findings`` — recurring findings
+    already have a comment from a prior review of this PR, so re-posting them
+    on every push would just spam duplicate comments on the same line.
     """
     result = state.aggregated or ReviewResult()
 
@@ -125,7 +192,7 @@ async def format_output(state: ReviewState) -> dict:
             "line": finding.line,
             "body": f"**[{finding.severity.upper()}] {finding.category}**\n{finding.description}\n\n_Suggested fix:_ {finding.recommendation}",
         }
-        for finding in result.findings
+        for finding in state.new_findings
     ]
 
     return {
