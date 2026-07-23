@@ -1,0 +1,349 @@
+╔════════════════════════════════════════════════════════════════════════════════╗
+║                  DETAILED LOGGING SYSTEM — VISUAL GUIDE                         ║
+║                      PR Review Agent Service (v0.1.0)                           ║
+╚════════════════════════════════════════════════════════════════════════════════╝
+
+
+                           EXECUTION FLOW WITH LOGS
+═════════════════════════════════════════════════════════════════════════════════
+
+  ┌─────────────────────┐
+  │   SERVICE STARTUP   │
+  └──────────┬──────────┘
+             │
+             ├─► [app/main.py] ────────► Starting PR Review Agent service
+             │                           (v0.1.0)
+             │
+             ├─► [app/main.py] ────────► Initializing idempotency database
+             │   └─► ✓ Database initialized successfully
+             │
+             ├─► [app/main.py] ────────► Initializing findings database
+             │   └─► ✓ Database initialized successfully
+             │
+             └─► 🚀 Service ready for incoming webhooks
+
+
+  ┌─────────────────────────────────────────────────┐
+  │     GITHUB WEBHOOK RECEIVED (POST /webhooks)    │
+  └──────────────┬──────────────────────────────────┘
+                 │
+        [app/api/webhooks.py]
+                 │
+        ┌────────┴────────┐
+        │                 │
+        ▼                 ▼
+   ┌─────────┐      ┌──────────────────┐
+   │ VALIDATE │      │  EXTRACT PR INFO │
+   │ SIGNATURE│      │  FROM PAYLOAD    │
+   └────┬────┘      └────────┬─────────┘
+        │                    │
+        ├─► verify_signature ├─► owner, repo, pull_number
+        │   (HMAC-SHA256)    ├─► pr_id, head_sha
+        │                    ├─► installation_id
+        │                    └─► pr_url
+        │
+        ├─► ✓ Signature validation passed
+        │
+        ├─► Event type & action check
+        │   (pull_request + {opened, synchronize})
+        │
+        └─► Schedule Background Task
+
+
+  ┌──────────────────────────────────────────────────┐
+  │  BACKGROUND TASK: PROCESS PULL REQUEST           │
+  │  [app/api/webhooks.py::process_pull_request()]   │
+  └──────────────┬───────────────────────────────────┘
+                 │
+      ┌──────────┴──────────┐
+      │                     │
+      ▼                     ▼
+  ┌──────────┐          ┌────────────┐
+  │IDEMPOTENT│          │ GITHUB APP │
+  │  CHECK   │          │ AUTHENTICATION
+  └────┬─────┘          └──────┬─────┘
+       │                       │
+       ├─► [app/github/auth.py]
+       │   ├─► Load private key (file|env var)
+       │   ├─► Generate JWT (RS256, 10 min exp)
+       │   └─► Exchange JWT for installation token
+       │       └─► ✓ Token obtained (expires_at: ...)
+       │
+       └─► PR already processed?
+           ├─► YES: ⊘ Skip (idempotent)
+           └─► NO: Continue...
+
+
+       ┌──────────────────────┐
+       │  FETCH PR CONTEXT    │
+       └────────────┬─────────┘
+                    │
+       [app/github/client.py]
+                    │
+           ┌────────┴────────┐
+           │                 │
+           ▼                 ▼
+       ┌─────────┐    ┌────────────┐
+       │FETCH    │    │FETCH       │
+       │FILES    │    │README.md   │
+       └────┬────┘    └──────┬─────┘
+            │                │
+            ├─► GET /repos/owner/repo/pulls/{pr}/files
+            │   ├─► Paginated (100 per page)
+            │   ├─► Extract patch fragments
+            │   └─► ✓ Fetched 8 files
+            │
+            └─► Build unified diff
+                ├─► Aggregate all patches
+                ├─► Skip binary/oversized
+                └─► ✓ Diff built (4521 bytes)
+
+
+       ┌──────────────────────────────────┐
+       │  REVIEW PIPELINE (LANGGRAPH)     │
+       │  4 Parallel Lenses               │
+       └────────────┬──────────────────────┘
+                    │
+       [app/agent/nodes.py]
+                    │
+      ┌─────────────┼─────────────────┬──────────────┐
+      │             │                 │              │
+      ▼             ▼                 ▼              ▼
+  ┌──────────┐ ┌──────────┐     ┌──────────┐   ┌──────────┐
+  │SECURITY  │ │SCALABILITY    │STYLE     │   │CORRECTNESS
+  │REVIEW    │ │REVIEW        │REVIEW    │   │REVIEW
+  └────┬─────┘ └──────┬───────┘└────┬────┘   └────┬─────┘
+       │              │             │            │
+       ├─► _run_review()             │           │
+       │   ├─► [DRAFT]               │           │
+       │   │   LLM generates findings │           │
+       │   │                          │           │
+       │   └─► [CRITIQUE]            │           │
+       │       LLM self-refines      │           │
+       │                             │           │
+       ├─► ✓ Security review: 2 findings
+       ├─► ✓ Scalability review: 1 finding
+       ├─► ✓ Style review: 0 findings
+       └─► ✓ Correctness review: 1 finding
+
+
+       ┌──────────────────────────────┐
+       │  AGGREGATE & RANK FINDINGS    │
+       └────────────┬─────────────────┘
+                    │
+       [aggregate_and_rank()]
+                    │
+       ├─► Collect all findings (4 total)
+       ├─► Sort by: severity DESC, confidence DESC
+       │   ├─► critical=1, warning=2, suggestion=1
+       │   └─► ✓ Breakdown logged
+       │
+       ├─► Check for recurring findings
+       │   ├─► Query previous findings DB
+       │   └─► Split: new=4, recurring=0
+       │
+       ├─► Compute verdict
+       │   ├─► Any critical (conf >= 50)? → request_changes
+       │   └─► Else → approve
+       │
+       └─► Compute merge readiness
+           ├─► 100 - sum(finding_penalty)
+           └─► Result: 47%
+
+
+       ┌──────────────────────────────┐
+       │  FORMAT OUTPUT               │
+       └────────────┬─────────────────┘
+                    │
+       [format_output()]
+                    │
+       ├─► Build review body (markdown)
+       │   ├─► Verdict: ⛔ Changes requested — do not merge
+       │   ├─► Readiness: 47%
+       │   ├─► Summary table (crit/warn/suggest counts)
+       │   └─► Findings grouped by severity
+       │
+       └─► Build inline comments
+           ├─► One per new finding
+           └─► ✓ Formatted: 4 comments
+
+
+       ┌──────────────────────────────────┐
+       │  POST REVIEW TO GITHUB           │
+       └────────────┬─────────────────────┘
+                    │
+       [app/github/client.py::post_review()]
+                    │
+       ├─► POST /repos/owner/repo/pulls/{pr}/reviews
+       │   ├─► Event: REQUEST_CHANGES
+       │   ├─► Body: markdown review (2891 bytes)
+       │   └─► Comments: 4 inline reviews
+       │
+       └─► ✓ Review posted
+           └─► review_id: 5678910
+
+
+       ┌──────────────────────────────────┐
+       │  SAVE FINDINGS & MARK PROCESSED  │
+       └────────────┬─────────────────────┘
+                    │
+       ├─► Save 4 findings to findings_db
+       │   └─► ✓ Findings saved
+       │
+       ├─► Mark PR as processed
+       │   ├─► pr_id: 789
+       │   ├─► head_sha: def67890...
+       │   └─► review_id: 5678910
+       │
+       └─► ✓ PR review complete and findings saved
+
+
+═════════════════════════════════════════════════════════════════════════════════
+
+                            LOG LEVEL HIERARCHY
+                            ═══════════════════
+
+    CRITICAL ───────── Service-breaking failures (startup, fatal)
+       ▲
+       │
+     ERROR ─────────── Error conditions (API failures, timeouts)
+       ▲
+       │
+    WARNING ───────── Potentially problematic (missing README, mismatches)
+       ▲
+       │
+      INFO ──────────── Key milestones (webhook received, review complete)
+       ▲
+       │
+     DEBUG ───────── Detailed diagnostics (function calls, API details)
+
+
+═════════════════════════════════════════════════════════════════════════════════
+
+                        LOG OUTPUT COLORS (Terminal)
+                        ════════════════════════════
+
+    DEBUG   ┌─────────────────────────────────────────────────────┐
+            │ \033[36m DEBUG      \033[0m  (Cyan)                   │
+            └─────────────────────────────────────────────────────┘
+
+    INFO    ┌─────────────────────────────────────────────────────┐
+            │ \033[32m INFO       \033[0m  (Green)                  │
+            └─────────────────────────────────────────────────────┘
+
+    WARNING ┌─────────────────────────────────────────────────────┐
+            │ \033[33m WARNING    \033[0m  (Yellow)                 │
+            └─────────────────────────────────────────────────────┘
+
+    ERROR   ┌─────────────────────────────────────────────────────┐
+            │ \033[31m ERROR      \033[0m  (Red)                    │
+            └─────────────────────────────────────────────────────┘
+
+    CRITICAL┌─────────────────────────────────────────────────────┐
+            │ \033[41m CRITICAL   \033[0m  (Red Background)        │
+            └─────────────────────────────────────────────────────┘
+
+
+═════════════════════════════════════════════════════════════════════════════════
+
+                        FILES MODIFIED & CREATED
+                        ════════════════════════════
+
+    MODIFIED (6 files):
+    ├─ app/main.py                    (startup/shutdown logging)
+    ├─ app/api/webhooks.py            (webhook + background task logging)
+    ├─ app/github/auth.py             (auth + JWT logging)
+    ├─ app/github/client.py           (GitHub API logging)
+    ├─ app/github/signature.py        (signature validation logging)
+    └─ app/agent/nodes.py             (review pipeline logging)
+
+    CREATED (7 files):
+    ├─ app/logging_config.py          (centralized config + ColoredFormatter)
+    ├─ LOGGING.md                     (comprehensive user guide)
+    ├─ LOGGING_IMPLEMENTATION.md      (change summary)
+    ├─ LOGGING_QUICK_REFERENCE.md     (one-page cheatsheet)
+    ├─ LOGGING_CHANGES_SUMMARY.txt    (this file's data)
+    ├─ LOGGING_VISUAL_GUIDE.txt       (visual flow diagrams)
+    └─ logs/                          (auto-created directory)
+        ├─ pr_reviewer.log            (main log, rotated)
+        └─ pr_reviewer_errors.log     (errors only, rotated)
+
+
+═════════════════════════════════════════════════════════════════════════════════
+
+                        SUCCESS/FAILURE MARKERS
+                        ══════════════════════════
+
+    SUCCESS:           ✓ symbol + metric details
+    ├─ ✓ Signature validation passed
+    ├─ ✓ Installation token obtained (expires_at=2026-07-23T15:32:15Z)
+    ├─ ✓ Fetched 8 files from owner/repo#PR15
+    ├─ ✓ Unified diff built: 7 files, 1 skipped (binary/oversized)
+    ├─ ✓ Security review complete: 2 findings (approved=false)
+    ├─ ✓ Review posted to GitHub (review_id=5678910, 4 comments)
+    └─ ✓ PR review complete and findings saved
+
+    FAILURE:           ✗ symbol + error type + message
+    ├─ ✗ FAILED to process PR. Error type: HTTPStatusError: 401 Unauthorized
+    ├─ ✗ GitHub API error exchanging JWT: status=401
+    ├─ ✗ Private key file not found: ./github.pem
+    ├─ ✗ Security review failed: AuthenticationError: Invalid API key
+    └─ ✗ Aggregation failed: DatabaseError: table 'findings' doesn't exist
+
+
+═════════════════════════════════════════════════════════════════════════════════
+
+                        COMMON GREP PATTERNS
+                        ═══════════════════════
+
+    Find specific PR:          grep "owner/repo#15" logs/pr_reviewer.log
+    Find all failures:         grep "✗" logs/pr_reviewer.log
+    Find all successes:        grep "✓" logs/pr_reviewer.log
+    Find INFO level:           grep " INFO " logs/pr_reviewer.log
+    Find errors:               grep " ERROR\| CRITICAL" logs/pr_reviewer.log
+    Find API errors:           grep "API error" logs/pr_reviewer.log
+    Find startup logs:         grep -A5 "Starting PR Review Agent"
+    Follow in real-time:       tail -f logs/pr_reviewer.log
+
+
+═════════════════════════════════════════════════════════════════════════════════
+
+                        MONITORING DASHBOARD
+                        ═══════════════════════
+
+    Quick Metrics:
+    ├─ ✓ Successful reviews: grep "✓ PR review complete" | wc -l
+    ├─ ✗ Failed reviews:     grep "✗ FAILED" | wc -l
+    ├─ ⏭ Skipped reviews:    grep "⊘ Skipping" | wc -l
+    ├─ 🔴 Critical findings: grep "critical=" | grep "critical=[1-9]"
+    └─ ⚙️ Review time:       grep -E "Starting|complete" | analyze
+
+    Log Health:
+    ├─ Errors in last hour:   grep "ERROR\|CRITICAL" logs/pr_reviewer.log | tail -100
+    ├─ Warnings in last hour: grep "WARNING" logs/pr_reviewer.log | tail -50
+    └─ Disk usage:            du -sh logs/
+
+
+═════════════════════════════════════════════════════════════════════════════════
+
+                          DEPLOYMENT CHECKLIST
+                          ═════════════════════
+
+    ✓ All 6 modified files copied to production
+    ✓ app/logging_config.py is present
+    ✓ logs/ directory created with permissions 755
+    ✓ Log level set (DEBUG for dev, INFO for prod)
+    ✓ Environment variables verified
+    ✓ First PR tested: tail -f logs/pr_reviewer.log
+    ✓ External log aggregation configured (optional)
+    ✓ Alerting rules set up for "✗" and "ERROR"
+
+
+═════════════════════════════════════════════════════════════════════════════════
+
+For detailed information, see:
+  • LOGGING.md                  (comprehensive guide)
+  • LOGGING_QUICK_REFERENCE.md  (one-page cheatsheet)
+  • app/logging_config.py       (configuration code)
+
+═════════════════════════════════════════════════════════════════════════════════

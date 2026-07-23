@@ -36,15 +36,20 @@ async def github_webhook(
     * Dispatches processing to a background task and returns immediately.
     """
     raw_body = await request.body()
+    logger.debug(f"Received webhook request (payload size: {len(raw_body)} bytes)")
 
     if not verify_signature(raw_body, x_hub_signature_256, settings.github_webhook_secret):
+        logger.warning("Webhook signature validation failed - rejecting request")
         raise HTTPException(status_code=401, detail="Invalid signature")
+
+    logger.debug("✓ Webhook signature validation passed")
 
     payload = await request.json()
     action = payload.get("action")
-    logger.info("Received event=%s action=%s", x_github_event, action)
+    logger.info(f"Received GitHub event: type={x_github_event}, action={action}")
 
     if x_github_event != "pull_request" or action not in HANDLED_ACTIONS:
+        logger.info(f"Ignoring event: event_type={x_github_event}, action={action} (not in {HANDLED_ACTIONS})")
         return {"status": "ignored", "event": x_github_event, "action": action}
 
     pull_request = payload.get("pull_request", {})
@@ -57,10 +62,16 @@ async def github_webhook(
     repo = repository.get("name", "")
     installation_id = payload.get("installation", {}).get("id")
 
+    logger.info(
+        f"Processing PR: {owner}/{repo}#{pull_number} "
+        f"(id={pr_id}, sha={head_sha[:8]}..., installation={installation_id})"
+    )
+
     background_tasks.add_task(
         process_pull_request, owner, repo, pull_number, pr_id, pr_url, head_sha, installation_id
     )
 
+    logger.debug("✓ Background task scheduled for PR review")
     return {"status": "accepted"}
 
 
@@ -82,14 +93,23 @@ async def process_pull_request(
     Flow: idempotency check -> fetch diff (context) -> agent graph -> post
     review -> mark as processed.
     """
+    logger.info(f"[{owner}/{repo}#{pull_number}] Starting PR review pipeline")
+
     try:
+        logger.debug(f"[{owner}/{repo}#{pull_number}] Checking idempotency (pr_id={pr_id}, sha={head_sha[:8]}...)")
         if await is_processed(pr_id, head_sha):
-            logger.info("Skipping already-reviewed PR %s at sha=%s", pr_url, head_sha)
+            logger.info(f"[{owner}/{repo}#{pull_number}] ⊘ Skipping: PR already reviewed at this sha")
             return
 
+        logger.debug(f"[{owner}/{repo}#{pull_number}] Generating GitHub App installation token")
         token = await get_installation_token(str(installation_id))
-        diff = await fetch_diff(owner, repo, pull_number, token)
+        logger.debug(f"[{owner}/{repo}#{pull_number}] ✓ Installation token obtained")
 
+        logger.debug(f"[{owner}/{repo}#{pull_number}] Fetching PR diff (pull_number={pull_number})")
+        diff = await fetch_diff(owner, repo, pull_number, token)
+        logger.info(f"[{owner}/{repo}#{pull_number}] ✓ Diff fetched ({len(diff)} bytes)")
+
+        logger.debug(f"[{owner}/{repo}#{pull_number}] Building review state")
         state = ReviewState(
             diff=diff,
             pr_url=pr_url,
@@ -99,12 +119,34 @@ async def process_pull_request(
             repo=repo,
             token=token,
         )
+
+        logger.info(f"[{owner}/{repo}#{pull_number}] Running review graph (security, scalability, style, correctness)")
         graph = build_review_graph()
         result = await graph.ainvoke(state)
+        logger.info(
+            f"[{owner}/{repo}#{pull_number}] ✓ Review pipeline completed "
+            f"(verdict={result.get('verdict', '?')}, "
+            f"readiness={result.get('merge_readiness_score', '?')}%)"
+        )
 
+        logger.debug(
+            f"[{owner}/{repo}#{pull_number}] Posting review to GitHub "
+            f"(event={result['output'].get('event')}, "
+            f"{len(result['output'].get('comments', []))} inline comments)"
+        )
         review = await post_review(owner, repo, pull_number, token, result["output"])
+        logger.info(f"[{owner}/{repo}#{pull_number}] ✓ Review posted to GitHub (review_id={review['id']})")
 
+        logger.debug(f"[{owner}/{repo}#{pull_number}] Marking PR as processed in idempotency store")
         await mark_processed(pr_id, head_sha, review_id=review["id"])
+        logger.debug(f"[{owner}/{repo}#{pull_number}] ✓ Idempotency marker saved")
+
+        logger.debug(f"[{owner}/{repo}#{pull_number}] Saving findings to database ({len(result['aggregated'].findings)} findings)")
         await save_findings(pr_id, head_sha, result["aggregated"].findings)
-    except Exception:
-        logger.exception("Failed to process pull request %s (sha=%s)", pr_url, head_sha)
+        logger.info(f"[{owner}/{repo}#{pull_number}] ✓ PR review complete and findings saved")
+
+    except Exception as e:
+        logger.exception(
+            f"[{owner}/{repo}#{pull_number}] ✗ FAILED to process PR (sha={head_sha[:8]}...). "
+            f"Error type: {type(e).__name__}, Message: {str(e)}"
+        )
