@@ -1,0 +1,278 @@
+═══════════════════════════════════════════════════════════════════════════════
+  DETAILED LOGGING IMPLEMENTATION — PR REVIEWER SERVICE
+═══════════════════════════════════════════════════════════════════════════════
+
+PROJECT: pr-reviewer-dev
+DATE: 2026-07-23
+OBJECTIVE: Add comprehensive logging to track successes and failures
+
+═══════════════════════════════════════════════════════════════════════════════
+  FILES MODIFIED (6 files)
+═══════════════════════════════════════════════════════════════════════════════
+
+1. app/main.py
+   ├─ Added: logging import and configure_logging() call
+   ├─ New logs: Service startup/shutdown, database initialization
+   └─ Output: "🚀 PR Review Agent service started successfully"
+
+2. app/api/webhooks.py
+   ├─ Added: Webhook reception logging with payload size
+   ├─ Added: Signature validation logging
+   ├─ Added: PR metadata extraction logging
+   ├─ Added: Complete process_pull_request() phase tracking
+   ├─ Pattern: [owner/repo#number] prefix on all PR-related logs
+   ├─ Output format: Starting → [phases] → ✓ Complete or ✗ Failed
+   └─ Metrics: PR ID, SHA, installation ID, findings count, verdict
+
+3. app/github/auth.py
+   ├─ Added: Private key loading logging (file vs. env var)
+   ├─ Added: JWT generation logging
+   ├─ Added: Installation token exchange logging
+   └─ Error handling: Specific error types and response codes
+
+4. app/github/client.py
+   ├─ Added: PR files fetching with pagination details
+   ├─ Added: Unified diff building with file counts
+   ├─ Added: File content fetching logging
+   ├─ Added: README fetching with 404 handling
+   ├─ Added: Review posting with inline comment metrics
+   └─ Pattern: Track skipped files, total bytes, and counts
+
+5. app/github/signature.py
+   ├─ Added: Signature validation process logging
+   ├─ Added: Header format validation logging
+   ├─ Added: Signature mismatch detection
+   └─ Error types: Invalid format, mismatches
+
+6. app/agent/nodes.py
+   ├─ Added: Repository context building logging
+   ├─ Added: Per-lens review execution logging (4 lenses)
+   ├─ Added: Draft + critique phase tracking
+   ├─ Added: Finding aggregation and severity breakdown
+   ├─ Added: Recurring vs. new finding classification
+   ├─ Added: Output formatting metrics
+   ├─ Pattern: [owner/repo] prefix on all aggregate logs
+   └─ Metrics: Finding counts by severity, verdict, readiness score
+
+═══════════════════════════════════════════════════════════════════════════════
+  FILES CREATED (3 new files + 1 config)
+═══════════════════════════════════════════════════════════════════════════════
+
+1. app/logging_config.py (NEW)
+   ├─ Centralized logging configuration
+   ├─ ColoredFormatter class for terminal output
+   ├─ Dual output: console (colorized) + rotating file logs
+   ├─ Separate ERROR-level log
+   ├─ Rotating file handler: 10 MB per file, 5 backups
+   ├─ Module-specific log levels (app, third-party libraries)
+   └─ Logs directory: created automatically at ~/logs/
+
+2. LOGGING.md (DOCUMENTATION)
+   ├─ Complete user guide for the logging system
+   ├─ Log level explanations
+   ├─ Execution flow with example logs for each phase
+   ├─ Troubleshooting guide with common patterns
+   ├─ Monitoring and alerting integration patterns
+   ├─ Configuration options for production tuning
+   └─ Security considerations
+
+3. LOGGING_IMPLEMENTATION.md (SUMMARY)
+   ├─ Overview of all changes
+   ├─ File-by-file modification summary
+   ├─ Log output locations and rotation policy
+   ├─ Features list (success/failure markers, PR context, colors)
+   ├─ Usage examples with grep patterns
+   ├─ Configuration and customization guide
+   ├─ Log flow diagram for successful review
+   └─ Error detection examples with troubleshooting
+
+4. LOGGING_QUICK_REFERENCE.md (QUICK START)
+   ├─ One-page reference for common logging tasks
+   ├─ View/search commands
+   ├─ Common log patterns (success, failure, warnings)
+   ├─ Startup verification checklist
+   ├─ Troubleshooting table
+   ├─ Log location and rotation info
+   ├─ Verbosity adjustment guide
+   └─ Alerting rules examples
+
+═══════════════════════════════════════════════════════════════════════════════
+  LOG OUTPUT SPECIFICATIONS
+═══════════════════════════════════════════════════════════════════════════════
+
+LOCATIONS:
+  logs/pr_reviewer.log          ← Main log (DEBUG and above)
+  logs/pr_reviewer_errors.log   ← Errors only (ERROR and above)
+
+FORMAT:
+  [timestamp] | [module:line] | [LEVEL] | [message]
+  Example: 2026-07-23 14:32:15 | app.api.webhooks:45 | INFO | Processing PR...
+
+COLORS:
+  DEBUG      → Cyan      (\033[36m)
+  INFO       → Green     (\033[32m)
+  WARNING    → Yellow    (\033[33m)
+  ERROR      → Red       (\033[31m)
+  CRITICAL   → Red bg    (\033[41m)
+
+ROTATION:
+  Size: 10 MB per file
+  Backups: 5 (total: 50 MB max)
+  Policy: Automatic, no manual intervention needed
+
+═══════════════════════════════════════════════════════════════════════════════
+  KEY LOGGING PATTERNS
+═══════════════════════════════════════════════════════════════════════════════
+
+SUCCESS MARKERS:
+  ✓ symbol marks all successful operations
+  Examples:
+    ✓ Webhook signature validation passed
+    ✓ Installation token obtained (expires_at=...)
+    ✓ Unified diff built: 7 files with patches, 1 skipped
+    ✓ Security review complete: 2 findings (approved=false)
+    ✓ Review posted to GitHub: review_id=5678910, 4 comments
+    ✓ PR review complete and findings saved
+
+FAILURE MARKERS:
+  ✗ symbol marks all failures
+  Includes error type and message
+  Examples:
+    ✗ FAILED to process PR (sha=...). Error type: HTTPStatusError
+    ✗ GitHub API error exchanging JWT: status=401
+    ✗ Private key file not found: ./github.pem
+
+PR CONTEXT PREFIX:
+  All PR-related logs include [owner/repo#number]
+  Enables easy filtering: grep "owner/repo#15" logs/pr_reviewer.log
+  Example: [owner/repo#15] Starting PR review pipeline
+
+PHASE TRACKING:
+  Each major phase: Starting... → ...processing... → ✓ ...complete
+  Phases: webhook → auth → fetch → review (4 lenses) → aggregate → post
+
+═══════════════════════════════════════════════════════════════════════════════
+  TYPICAL EXECUTION FLOW (LOGS)
+═══════════════════════════════════════════════════════════════════════════════
+
+SERVICE STARTUP:
+  INFO  | Starting PR Review Agent service (v0.1.0)
+  INFO  | ✓ Idempotency database initialized successfully
+  INFO  | ✓ Findings database initialized successfully
+  INFO  | 🚀 PR Review Agent service started successfully
+
+WEBHOOK RECEIVED:
+  DEBUG | Received webhook request (payload size: 2450 bytes)
+  DEBUG | ✓ Webhook signature validation passed
+  INFO  | Received GitHub event: type=pull_request, action=opened
+  INFO  | Processing PR: owner/repo#15 (id=789, sha=def67890...)
+  DEBUG | ✓ Background task scheduled for PR review
+
+BACKGROUND TASK: PR REVIEW PIPELINE:
+  [phase 1] Idempotency check
+    DEBUG | [owner/repo#15] Checking idempotency...
+    (either: "Skipping: already reviewed" OR continue)
+
+  [phase 2] GitHub auth
+    DEBUG | Generating GitHub App JWT...
+    DEBUG | ✓ Installation token obtained
+
+  [phase 3] Fetch diff
+    DEBUG | Fetching files for owner/repo#PR15
+    INFO  | ✓ Fetched 8 files
+    INFO  | ✓ Unified diff built: 7 files, 1 skipped
+
+  [phase 4] Review lenses (parallel)
+    DEBUG | [owner/repo] Building review context...
+    INFO  | [owner/repo] ✓ Security review complete: 2 findings
+    INFO  | [owner/repo] ✓ Scalability review complete: 1 finding
+    INFO  | [owner/repo] ✓ Style review complete: 0 findings
+    INFO  | [owner/repo] ✓ Correctness review complete: 1 finding
+
+  [phase 5] Aggregate findings
+    DEBUG | [owner/repo] Aggregating findings...
+    DEBUG | Finding breakdown: critical=1, warning=2, suggestion=1
+    INFO  | [owner/repo] ✓ Aggregation complete: verdict=request_changes, readiness_score=47%
+
+  [phase 6] Format output
+    INFO  | [owner/repo] ✓ Review output formatted: 4 inline_comments
+
+  [phase 7] Post to GitHub
+    DEBUG | Posting review to owner/repo#PR15...
+    INFO  | ✓ Review posted to GitHub (review_id=5678910)
+
+  [phase 8] Save findings
+    DEBUG | Saving findings to database...
+    INFO  | ✓ PR review complete and findings saved
+
+═══════════════════════════════════════════════════════════════════════════════
+  COMMON TROUBLESHOOTING QUERIES
+═══════════════════════════════════════════════════════════════════════════════
+
+Find specific PR:          grep "owner/repo#15" logs/pr_reviewer.log
+Find all failures:         grep "✗" logs/pr_reviewer.log
+Find all successes:        grep "✓" logs/pr_reviewer.log
+Find errors:               grep "ERROR\|CRITICAL" logs/pr_reviewer.log
+Find warnings:             grep "WARNING" logs/pr_reviewer.log
+Find GitHub API errors:    grep "GitHub API error" logs/pr_reviewer.log
+Find auth failures:        grep "401\|403\|Invalid" logs/pr_reviewer.log
+Find LLM errors:           grep "AuthenticationError\|RateLimitError" logs/pr_reviewer.log
+Find skipped reviews:      grep "Skipping\|already reviewed" logs/pr_reviewer.log
+
+═══════════════════════════════════════════════════════════════════════════════
+  INTEGRATION WITH MONITORING SYSTEMS
+═══════════════════════════════════════════════════════════════════════════════
+
+Splunk:
+  source="logs/pr_reviewer.log" "✗" | stats count by error_type
+
+ELK:
+  Can ingest rotating logs directly (JSON export ready)
+
+Datadog:
+  Error-level logs auto-tagged for alerting
+
+PagerDuty:
+  CRITICAL/ERROR events can trigger oncall
+
+Slack:
+  Log streaming to channels via hooks
+
+═══════════════════════════════════════════════════════════════════════════════
+  PRODUCTION DEPLOYMENT CHECKLIST
+═══════════════════════════════════════════════════════════════════════════════
+
+[ ] Copy all modified files to production
+[ ] Ensure app/logging_config.py is present
+[ ] Create logs/ directory with appropriate permissions (755)
+[ ] Set log level from DEBUG to INFO if desired (in logging_config.py)
+[ ] Verify environment variables: GITHUB_APP_ID, OPENAI_API_KEY, etc.
+[ ] Test with a real PR: tail -f logs/pr_reviewer.log
+[ ] Set up external log aggregation (optional)
+[ ] Configure alerting on ERROR patterns
+[ ] Archive logs periodically (optional, beyond 50 MB max local)
+
+═══════════════════════════════════════════════════════════════════════════════
+  NEXT STEPS
+═══════════════════════════════════════════════════════════════════════════════
+
+1. IMMEDIATE:
+   - Review LOGGING_QUICK_REFERENCE.md for daily operations
+   - Test the service with a real PR and verify logs appear
+
+2. CONFIGURATION:
+   - Adjust log levels in app/logging_config.py for production
+   - Set up external log aggregation if needed
+
+3. MONITORING:
+   - Set up alerts on "✗ FAILED" and "ERROR" patterns
+   - Create dashboard for log metrics (failure rate, review time)
+
+4. FUTURE:
+   - Add JSON structured logging for log aggregation platforms
+   - Export metrics (review count, failure rate, LLM tokens)
+   - Add request IDs for tracing across services
+
+═══════════════════════════════════════════════════════════════════════════════
+END OF SUMMARY
+═══════════════════════════════════════════════════════════════════════════════
