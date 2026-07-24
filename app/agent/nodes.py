@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
@@ -14,6 +15,53 @@ from app.github.client import get_readme
 from app.storage.findings import get_seen_fingerprints, split_new_and_recurring
 
 logger = logging.getLogger(__name__)
+
+
+def _extract_valid_lines_from_diff(diff: str) -> dict[str, set[int]]:
+    """Parse unified diff and extract valid line numbers per file (new side only).
+
+    Returns a dict mapping file paths to sets of valid line numbers (1-indexed)
+    that can receive inline comments. Only includes lines that exist in the
+    new version of each file.
+
+    Example:
+        diff: "diff --git a/file.py b/file.py\n@@ -5,3 +5,4 @@\n context\n+new line\n context"
+        returns: {"file.py": {5, 6, 7, 8}}
+    """
+    valid_lines: dict[str, set[int]] = {}
+    current_file = None
+    new_line_num = 0
+    in_hunk = False
+
+    for line in diff.split("\n"):
+        if line.startswith("diff --git"):
+            match = re.search(r"b/(.+?)$", line)
+            if match:
+                current_file = match.group(1)
+                valid_lines[current_file] = set()
+                in_hunk = False
+            continue
+
+        if line.startswith("@@"):
+            match = re.match(r"@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@", line)
+            if match:
+                new_line_num = int(match.group(1)) - 1
+                in_hunk = True
+            continue
+
+        if current_file is None or not in_hunk:
+            continue
+
+        if line.startswith("+") and not line.startswith("+++"):
+            new_line_num += 1
+            valid_lines[current_file].add(new_line_num)
+        elif line.startswith("-") and not line.startswith("---"):
+            continue
+        else:
+            new_line_num += 1
+            valid_lines[current_file].add(new_line_num)
+
+    return valid_lines
 
 
 def _get_llm() -> BaseChatModel:
@@ -269,6 +317,9 @@ async def format_output(state: ReviewState) -> dict:
     Inline comments are only posted for ``new_findings`` — recurring findings already
     have a comment from a prior review of this PR, so re-posting them on every push
     would just spam duplicate comments on the same line.
+
+    Validates that each finding's line number exists in the diff before posting
+    as an inline comment — invalid findings are kept in the body but not as comments.
     """
     logger.debug(f"[{state.owner}/{state.repo}] Formatting review output for GitHub")
     try:
@@ -305,8 +356,21 @@ async def format_output(state: ReviewState) -> dict:
 
         body = "\n".join(sections)
 
-        comments = [
-            {
+        valid_lines_per_file = _extract_valid_lines_from_diff(state.diff)
+
+        comments = []
+        skipped_inline = 0
+        for finding in state.new_findings:
+            valid_lines = valid_lines_per_file.get(finding.file, set())
+            if finding.line not in valid_lines:
+                logger.debug(
+                    f"[{state.owner}/{state.repo}] Skipping inline comment for {finding.file}:{finding.line} "
+                    f"(not in diff; valid lines: {sorted(valid_lines) if valid_lines else 'none'})"
+                )
+                skipped_inline += 1
+                continue
+
+            comments.append({
                 "path": finding.file,
                 "line": finding.line,
                 "body": (
@@ -314,14 +378,12 @@ async def format_output(state: ReviewState) -> dict:
                     f"{finding.confidence}% confidence\n\n"
                     f"{finding.description}\n\n**Recommendation:** {finding.recommendation}"
                 ),
-            }
-            for finding in state.new_findings
-        ]
+            })
 
         logger.info(
             f"[{state.owner}/{state.repo}] ✓ Review output formatted: "
             f"verdict={state.verdict}, body_length={len(body)}, "
-            f"inline_comments={len(comments)}"
+            f"inline_comments={len(comments)} (skipped {skipped_inline} invalid)"
         )
 
         return {
