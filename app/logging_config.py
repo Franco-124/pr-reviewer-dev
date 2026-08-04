@@ -117,7 +117,7 @@ LOGGING_CONFIG = {
             "handlers": ["file"],
             "propagate": False,
         },
-        "langchain_openai": {
+        "langchain_groq": {
             "level": "INFO",
             "handlers": ["file"],
             "propagate": False,

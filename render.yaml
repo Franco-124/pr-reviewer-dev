@@ -16,7 +16,7 @@ services:
         sync: false
       - key: GITHUB_PRIVATE_KEY
         sync: false
-      - key: OPENAI_API_KEY
+      - key: GROQ_API_KEY
         sync: false
       - key: LLM_MODEL_NAME
-        value: gpt-4.1-mini
+        value: llama-3.3-70b-versatile

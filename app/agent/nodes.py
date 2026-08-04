@@ -7,7 +7,7 @@ import re
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
-from langchain_openai import ChatOpenAI
+from langchain_groq import ChatGroq
 
 from app.agent.schemas import Finding, ReviewResult, ReviewState
 from app.config import settings
@@ -65,11 +65,11 @@ def _extract_valid_lines_from_diff(diff: str) -> dict[str, set[int]]:
 
 
 def _get_llm() -> BaseChatModel:
-    """Build a fresh ``ChatOpenAI`` client. Not memoized — API key/model can
+    """Build a fresh ``ChatGroq`` client. Not memoized — API key/model can
     change between calls (e.g. in tests), and LangChain clients are cheap to
     construct (no network I/O happens until the first invocation).
     """
-    return ChatOpenAI(model=settings.llm_model_name, api_key=settings.openai_api_key, temperature=0)
+    return ChatGroq(model=settings.llm_model_name, api_key=settings.groq_api_key, temperature=0.5)
 
 
 _SHARED_INSTRUCTIONS = (

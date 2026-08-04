@@ -28,8 +28,8 @@ class Settings(BaseSettings):
     github_private_key_path: str = ""
 
     # ── LLM (required) ──────────────────────────────────────
-    openai_api_key: str
-    llm_model_name: str = "gpt-4.1-mini"
+    groq_api_key: str
+    llm_model_name: str = "llama-3.3-70b-versatile"
 
     # ── Server ──────────────────────────────────────────────
     host: str = "0.0.0.0"
