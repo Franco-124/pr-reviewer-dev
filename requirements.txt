@@ -10,9 +10,9 @@ PyJWT>=2.10,<3
 cryptography>=44,<45
 
 # LangGraph
-langgraph>=0.3,<1
+langgraph>=1.0,<2
 langchain-core>=1.4.9,<2
-langchain-groq>=0.2,<1
+langchain-groq>=1.0,<2
 
 # Storage
 aiosqlite>=0.20,<1
