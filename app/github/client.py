@@ -33,7 +33,7 @@ async def fetch_pr_files(owner: str, repo: str, pull_number: int, token: str) ->
     page = 1
 
     try:
-        async with httpx.AsyncClient(base_url=GITHUB_API_URL, headers=_auth_headers(token)) as client:
+        async with httpx.AsyncClient(base_url=GITHUB_API_URL, headers=_auth_headers(token), timeout=60.0) as client:
             while True:
                 logger.debug(f"  Fetching page {page} (per_page={PER_PAGE})")
                 response = await client.get(
@@ -97,7 +97,7 @@ async def fetch_file_content(owner: str, repo: str, path: str, ref: str, token: 
     """
     logger.debug(f"Fetching file content: {owner}/{repo}/{path} (ref={ref[:8]}...)")
     try:
-        async with httpx.AsyncClient(base_url=GITHUB_API_URL, headers=_auth_headers(token)) as client:
+        async with httpx.AsyncClient(base_url=GITHUB_API_URL, headers=_auth_headers(token), timeout=60.0) as client:
             response = await client.get(
                 f"/repos/{owner}/{repo}/contents/{path}",
                 params={"ref": ref},
@@ -124,7 +124,7 @@ async def get_readme(owner: str, repo: str, ref: str, token: str) -> str | None:
     """
     logger.debug(f"Fetching README.md: {owner}/{repo} (ref={ref[:8]}...)")
     try:
-        async with httpx.AsyncClient(base_url=GITHUB_API_URL, headers=_auth_headers(token)) as client:
+        async with httpx.AsyncClient(base_url=GITHUB_API_URL, headers=_auth_headers(token), timeout=60.0) as client:
             response = await client.get(
                 f"/repos/{owner}/{repo}/contents/README.md",
                 params={"ref": ref},
@@ -165,7 +165,7 @@ async def post_review(owner: str, repo: str, pull_number: int, token: str, revie
     )
 
     try:
-        async with httpx.AsyncClient(base_url=GITHUB_API_URL, headers=_auth_headers(token)) as client:
+        async with httpx.AsyncClient(base_url=GITHUB_API_URL, headers=_auth_headers(token), timeout=120.0) as client:
             response = await client.post(
                 f"/repos/{owner}/{repo}/pulls/{pull_number}/reviews",
                 json=review_payload,
